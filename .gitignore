@@ -1,0 +1,15 @@
+# Sessions contain login cookies: never commit
+naukri_state.json
+linkedin_state.json
+
+# Personal application data and logs
+applications_history.csv
+linkedin_history.csv
+*.log
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.vscode/

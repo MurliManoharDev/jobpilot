@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Naukri Auto-Apply Progress</title>
+<style>
+  body { font-family: Segoe UI, Arial, sans-serif; margin: 24px; background: #f5f7fa; color: #1f2937; }
+  h1 { margin: 0 0 4px; }
+  .muted { color: #6b7280; font-size: 13px; }
+  .cards { display: flex; gap: 12px; flex-wrap: wrap; margin: 16px 0; }
+  .card { background: #fff; border-radius: 8px; padding: 12px 18px; box-shadow: 0 1px 3px rgba(0,0,0,.1); min-width: 120px; }
+  .card b { display: block; font-size: 24px; }
+  .controls { margin: 8px 0 12px; display: flex; gap: 8px; }
+  input, select { padding: 6px 8px; border: 1px solid #d1d5db; border-radius: 6px; }
+  table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,.1); }
+  th, td { padding: 8px 10px; text-align: left; border-bottom: 1px solid #eef0f3; font-size: 14px; }
+  th { background: #1f2937; color: #fff; }
+  .badge { padding: 2px 8px; border-radius: 10px; font-size: 12px; white-space: nowrap; }
+  .Applied { background: #d1fae5; color: #065f46; }
+  .Error { background: #fee2e2; color: #991b1b; }
+  .Unconfirmed { background: #fef3c7; color: #92400e; }
+  .other { background: #e5e7eb; color: #374151; }
+  a { color: #2563eb; }
+</style>
+</head>
+<body>
+<h1>Naukri Auto-Apply Progress</h1>
+<div class="muted">Auto-refreshes every 5 minutes. <span id="updated"></span></div>
+
+<div class="cards" id="cards"></div>
+
+<div class="controls">
+  <select id="platform"><option value="">All platforms</option><option>Naukri</option><option>LinkedIn</option></select>
+  <input id="search" placeholder="Search title or company">
+  <select id="status"><option value="">All statuses</option></select>
+</div>
+
+<table>
+  <thead><tr><th>Date Applied</th><th>Platform</th><th>Job Title</th><th>Company</th><th>Status</th></tr></thead>
+  <tbody id="rows"></tbody>
+</table>
+
+<script>
+function parseCSV(text) {
+  const rows = []; let row = [], field = "", inQ = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQ) {
+      if (c === '"' && text[i + 1] === '"') { field += '"'; i++; }
+      else if (c === '"') inQ = false;
+      else field += c;
+    } else if (c === '"') inQ = true;
+    else if (c === ",") { row.push(field); field = ""; }
+    else if (c === "\n" || c === "\r") {
+      if (c === "\r" && text[i + 1] === "\n") i++;
+      row.push(field); field = ""; rows.push(row); row = [];
+    } else field += c;
+  }
+  if (field || row.length) { row.push(field); rows.push(row); }
+  return rows.filter(r => r.length > 1);
+}
+
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
+}
+
+function safeUrl(u) {
+  return /^https?:\/\//i.test(u) ? u : "#";
+}
+
+let data = [];
+
+const platformData = () => {
+  const p = document.getElementById("platform").value;
+  return p ? data.filter(r => r.Platform === p) : data;
+};
+
+function render() {
+  const q = document.getElementById("search").value.toLowerCase();
+  const st = document.getElementById("status").value;
+  const list = platformData().filter(r =>
+    (!st || r.Status === st) &&
+    (`${r["Job Title"]} ${r.Company}`.toLowerCase().includes(q)));
+  document.getElementById("rows").innerHTML = list.map(r => {
+    const cls = ["Applied", "Error", "Unconfirmed"].includes(r.Status) ? r.Status : "other";
+    return `<tr><td>${esc(r["Date Applied"])}</td><td>${esc(r.Platform)}</td>
+      <td><a href="${esc(safeUrl(r.URL))}" target="_blank" rel="noopener">${esc(r["Job Title"])}</a></td>
+      <td>${esc(r.Company)}</td><td><span class="badge ${cls}">${esc(r.Status)}</span></td></tr>`;
+  }).join("");
+}
+
+function renderCards() {
+  const rows = platformData();
+  const counts = {};
+  rows.forEach(r => counts[r.Status] = (counts[r.Status] || 0) + 1);
+  const today = new Date().toISOString().slice(0, 10);
+  const todayApplied = rows.filter(r => r.Status === "Applied" && r["Date Applied"].startsWith(today)).length;
+  const cards = [["Total processed", rows.length], ["Applied today", todayApplied], ...Object.entries(counts)];
+  document.getElementById("cards").innerHTML =
+    cards.map(([k, v]) => `<div class="card"><b>${v}</b>${esc(k)}</div>`).join("");
+
+  const sel = document.getElementById("status"), cur = sel.value;
+  sel.innerHTML = '<option value="">All statuses</option>' +
+    Object.keys(counts).map(s => `<option ${s === cur ? "selected" : ""}>${esc(s)}</option>`).join("");
+}
+
+const SOURCES = [["Naukri", "applications_history.csv"], ["LinkedIn", "linkedin_history.csv"]];
+
+async function readCsv(name) {
+  const res = await fetch(name + "?t=" + Date.now(), { cache: "no-store" });
+  if (!res.ok) return [];
+  const rows = parseCSV(await res.text());
+  const head = rows.shift() || [];
+  return rows.map(r => Object.fromEntries(head.map((h, i) => [h, r[i] || ""])));
+}
+
+async function load() {
+  try {
+    const all = await Promise.all(SOURCES.map(async ([p, f]) => (await readCsv(f)).map(r => ({ ...r, Platform: p }))));
+    data = all.flat().sort((a, b) => b["Date Applied"].localeCompare(a["Date Applied"]));
+    renderCards(); render();
+    document.getElementById("updated").textContent = "Last updated " + new Date().toLocaleTimeString();
+  } catch (e) {
+    document.getElementById("updated").textContent = "Could not read CSV: " + e;
+  }
+}
+
+document.getElementById("search").addEventListener("input", render);
+document.getElementById("status").addEventListener("change", render);
+document.getElementById("platform").addEventListener("change", () => { renderCards(); render(); });
+load();
+setInterval(load, 300000);
+</script>
+</body>
+</html>
